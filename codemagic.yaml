@@ -10,33 +10,35 @@ workflows:
     scripts:
       - name: Unzip Project Archive
         script: |
-          echo "Extracting the actual zip archive..."
-          unzip -o Brahmanand-iOS-Reconstructed-final.zip || unzip -o *.zip
+          echo "Extracting the app archive..."
+          unzip -o Brahmanand-iOS-Reconstructed-final.zip
           
-          echo "Moving nested files up..."
-          # Since it was created on an iPad, it unzips into an inner folder structure
-          # Move everything from the extracted folder to the main directory
-          EXTRACTED_DIR=$(find . -maxdepth 2 -type d -name "BrahmanandPublicSchool*" | head -n 1)
-          if [ -z "$EXTRACTED_DIR" ]; then
-            EXTRACTED_DIR=$(find . -maxdepth 3 -type d -name "iOS" -o -name "ios" | head -n 1 | xargs dirname)
-          fi
+          echo "Locating workspace core paths..."
+          # Find where the project root files actually live
+          PKG_PATH=$(find . -name "package.json" -not -path "*/node_modules/*" | head -n 1)
+          PKG_DIR=$(dirname "$PKG_PATH")
           
-          echo "Target folder found at: $EXTRACTED_DIR"
-          cp -R "$EXTRACTED_DIR"/. . || true
+          # Move all project content directly out to the main execution directory
+          cp -R "$PKG_DIR"/. .
+          rm -rf Brahmanand-iOS-Reconstructed-final.zip
       - name: Install Node Modules
         script: |
           yarn install --no-immutable
       - name: Install CocoaPods Dependencies
         script: |
-          cd iOS || cd ios || cd BrahmanandPublicSchool/iOS || cd BrahmanandPublicSchool/ios
+          XCODE_DIR=$(find . -name "*.xcodeproj" -not -path "*/node_modules/*" | head -n 1 | xargs dirname)
+          cd "$XCODE_DIR"
           if [ ! -f Podfile ]; then
             pod init
           fi
           pod install
       - name: Build Unsigned iOS Application
         script: |
-          cd iOS || cd ios || cd BrahmanandPublicSchool/iOS || cd BrahmanandPublicSchool/ios
-          SCHEME_NAME=$(basename *.xcodeproj .xcodeproj)
+          XCODEPROJECT=$(find . -name "*.xcodeproj" -not -path "*/node_modules/*" | head -n 1)
+          PROJ_DIR=$(dirname "$XCODEPROJECT")
+          cd "$PROJ_DIR"
+          SCHEME_NAME=$(basename "$XCODEPROJECT" .xcodeproj)
+          
           xcodebuild -project "$SCHEME_NAME.xcodeproj" \
             -scheme "$SCHEME_NAME" \
             -configuration Release \
