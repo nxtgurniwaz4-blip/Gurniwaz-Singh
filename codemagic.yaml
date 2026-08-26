@@ -1,6 +1,6 @@
 workflows:
   react-native-ios:
-    name: Brahmanand School iOS Build
+    name: Brahmanand School iOS and iPadOS Build
     max_build_duration: 60
     instance_type: mac_mini_m1
     environment:
@@ -18,17 +18,21 @@ workflows:
           yarn install --no-immutable
       - name: Install CocoaPods Dependencies
         script: |
-          cd iOS
+          PROJ_DIR=$(find . -name "*.xcodeproj" -not -path "*/node_modules/*" | head -n 1 | xargs dirname)
+          cd "$PROJ_DIR"
           if [ ! -f Podfile ]; then
             pod init
           fi
           pod install
-          cd ..
       - name: Build Unsigned iOS Application
         script: |
-          cd iOS
-          xcodebuild -project BrahmanandPublicSchool.xcodeproj \
-            -scheme BrahmanandPublicSchool \
+          XCODEPROJECT=$(find . -name "*.xcodeproj" -not -path "*/node_modules/*" | head -n 1)
+          PROJ_DIR=$(dirname "$XCODEPROJECT")
+          cd "$PROJ_DIR"
+          SCHEME_NAME=$(basename "$XCODEPROJECT" .xcodeproj)
+          
+          xcodebuild -project "$SCHEME_NAME.xcodeproj" \
+            -scheme "$SCHEME_NAME" \
             -configuration Release \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
@@ -37,4 +41,5 @@ workflows:
             clean build
     artifacts:
       - "**/build/Build/Products/Release-iphoneos/*.app"
+      - "**/build/Build/Products/Release-iphoneos/*.ipa"
       - "**/*.ipa"
