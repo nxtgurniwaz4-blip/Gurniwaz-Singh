@@ -1,0 +1,35 @@
+workflows:
+  react-native-ios:
+    name: Brahmanand School iOS Build
+    max_build_duration: 60
+    instance_type: mac_mini_m1
+    environment:
+      node: latest
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Unzip and Align Project Files
+        script: |
+          echo "Extracting project zip archive..."
+          unzip -o Brahmanand-iOS-Reconstructed.zip
+          echo "Aligning internal repository directories..."
+          cp -R mnt/data/Brahmanand-iOS-Reconstructed/. .
+          rm -rf mnt Brahmanand-iOS-Reconstructed.zip
+      - name: Install Node Modules
+        script: |
+          yarn install
+      - name: Install CocoaPods Dependencies
+        script: |
+          cd ios && pod install
+      - name: Build Unsigned iOS Application
+        script: |
+          xcodebuild -workspace ios/BrahmanandPublicSchool.xcworkspace \
+            -scheme BrahmanandPublicSchool \
+            -configuration Release \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE="" \
+            clean build
+    artifacts:
+      - ios/build/Build/Products/Release-iphoneos/*.app
