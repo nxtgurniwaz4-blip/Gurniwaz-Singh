@@ -1,152 +1,157 @@
 workflows:
   ios-build:
-    name: Brahmanand iOS Build
+    name: Brahmanand iOS IPA
 
     environment:
       xcode: latest
       cocoapods: default
 
     scripts:
-      - name: Extract iOS project
+
+      - name: Extract project ZIP
         script: |
           set -e
 
-          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
+          ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No ZIP file found in repository root."
+            echo "ERROR: No ZIP file found."
             exit 1
           fi
 
-          echo "Using ZIP: $ZIP_FILE"
+          rm -rf "$CM_BUILD_DIR/extracted_project"
+          mkdir -p "$CM_BUILD_DIR/extracted_project"
 
-          rm -rf extracted_project
-          mkdir -p extracted_project
+          unzip -q -o "$ZIP_FILE" -d "$CM_BUILD_DIR/extracted_project"
 
-          unzip -q -o "$ZIP_FILE" -d extracted_project
+          PROJECT=$(find "$CM_BUILD_DIR/extracted_project" \
+            -type d -name "*.xcodeproj" -print -quit)
 
-          PROJECT_PATH=$(find extracted_project -type d -name "*.xcodeproj" -print -quit)
-          WORKSPACE_PATH=$(find extracted_project -type d -name "*.xcworkspace" -print -quit)
-
-          if [ -z "$PROJECT_PATH" ] && [ -z "$WORKSPACE_PATH" ]; then
-            echo "ERROR: No .xcodeproj or .xcworkspace found inside ZIP."
-            find extracted_project -maxdepth 4 -type f | head -100
-            exit 1
-          fi
-
-          if [ -n "$WORKSPACE_PATH" ]; then
-            BUILD_DIR=$(dirname "$WORKSPACE_PATH")
-          else
-            BUILD_DIR=$(dirname "$PROJECT_PATH")
-          fi
-
-          echo "$BUILD_DIR" > "$CM_BUILD_DIR/project_dir"
-
-          echo "Project directory:"
-          cat "$CM_BUILD_DIR/project_dir"
-
-      - name: Install CocoaPods Dependencies
-        script: |
-          set -e
-
-          PROJECT_DIR=$(cat "$CM_BUILD_DIR/project_dir")
-          cd "$PROJECT_DIR"
-
-          if [ -f "Podfile" ]; then
-            echo "Podfile found."
-            pod install --repo-update
-          else
-            echo "No Podfile found."
-            echo "Continuing because CocoaPods is not required."
-          fi
-
-      - name: Find Xcode Scheme
-        script: |
-          set -e
-
-          PROJECT_DIR=$(cat "$CM_BUILD_DIR/project_dir")
-          cd "$PROJECT_DIR"
-
-          WORKSPACE=$(find . -maxdepth 1 -type d -name "*.xcworkspace" -print -quit)
-          PROJECT=$(find . -maxdepth 1 -type d -name "*.xcodeproj" -print -quit)
+          WORKSPACE=$(find "$CM_BUILD_DIR/extracted_project" \
+            -type d -name "*.xcworkspace" \
+            ! -name "Pods.xcworkspace" \
+            -print -quit)
 
           if [ -n "$WORKSPACE" ]; then
-            echo "Workspace: $WORKSPACE"
-
-            SCHEME=$(xcodebuild \
-              -workspace "$WORKSPACE" \
-              -list 2>/dev/null |
-              awk '/Schemes:/{flag=1;next} flag && NF{print; exit}' |
-              xargs)
-
-            BUILD_TYPE="workspace"
-            BUILD_FILE="$WORKSPACE"
-
+            PROJECT_DIR=$(dirname "$WORKSPACE")
           elif [ -n "$PROJECT" ]; then
-            echo "Project: $PROJECT"
-
-            SCHEME=$(xcodebuild \
-              -project "$PROJECT" \
-              -list 2>/dev/null |
-              awk '/Schemes:/{flag=1;next} flag && NF{print; exit}' |
-              xargs)
-
-            BUILD_TYPE="project"
-            BUILD_FILE="$PROJECT"
-
+            PROJECT_DIR=$(dirname "$PROJECT")
           else
-            echo "ERROR: No Xcode project/workspace found."
+            echo "ERROR: ZIP does not contain an Xcode project."
             exit 1
           fi
 
-          if [ -z "$SCHEME" ]; then
-            echo "ERROR: Could not determine Xcode scheme."
-            exit 1
-          fi
+          echo "PROJECT_DIR=$PROJECT_DIR"
 
-          echo "Scheme: $SCHEME"
-          echo "$BUILD_TYPE" > "$CM_BUILD_DIR/build_type"
-          echo "$BUILD_FILE" > "$CM_BUILD_DIR/build_file"
-          echo "$SCHEME" > "$CM_BUILD_DIR/scheme"
+          echo "$PROJECT_DIR" > "$CM_BUILD_DIR/project_dir"
 
-      - name: Build iOS Archive
+      - name: Install CocoaPods
         script: |
           set -e
 
           PROJECT_DIR=$(cat "$CM_BUILD_DIR/project_dir")
-          BUILD_TYPE=$(cat "$CM_BUILD_DIR/build_type")
-          BUILD_FILE=$(cat "$CM_BUILD_DIR/build_file")
-          SCHEME=$(cat "$CM_BUILD_DIR/scheme")
-
           cd "$PROJECT_DIR"
 
-          ARCHIVE_PATH="$CM_BUILD_DIR/Brahmanand.xcarchive"
+          if [ -f Podfile ]; then
+            pod install
+          else
+            echo "No Podfile found — skipping CocoaPods."
+          fi
+
+      - name: Detect Project
+        script: |
+          set -e
+
+          PROJECT_DIR=$(cat "$CM_BUILD_DIR/project_dir")
+          cd "$PROJECT_DIR"
+
+          WORKSPACE=$(find . -maxdepth 1 -type d \
+            -name "*.xcworkspace" \
+            ! -name "Pods.xcworkspace" \
+            -print -quit)
+
+          PROJECT=$(find . -maxdepth 1 -type d \
+            -name "*.xcodeproj" \
+            -print -quit)
+
+          if [ -n "$WORKSPACE" ]; then
+            echo "BUILD_TYPE=workspace" > "$CM_BUILD_DIR/build_info"
+            echo "BUILD_FILE=$WORKSPACE" >> "$CM_BUILD_DIR/build_info"
+
+            xcodebuild -workspace "$WORKSPACE" -list
+
+          elif [ -n "$PROJECT" ]; then
+            echo "BUILD_TYPE=project" > "$CM_BUILD_DIR/build_info"
+            echo "BUILD_FILE=$PROJECT" >> "$CM_BUILD_DIR/build_info"
+
+            xcodebuild -project "$PROJECT" -list
+
+          else
+            echo "ERROR: No Xcode project found."
+            exit 1
+          fi
+
+      - name: Build Archive
+        script: |
+          set -e
+
+          PROJECT_DIR=$(cat "$CM_BUILD_DIR/project_dir")
+          cd "$PROJECT_DIR"
+
+          source "$CM_BUILD_DIR/build_info"
 
           if [ "$BUILD_TYPE" = "workspace" ]; then
+            SCHEME=$(xcodebuild \
+              -workspace "$BUILD_FILE" \
+              -list 2>/dev/null |
+              awk '/Schemes:/{getline; gsub(/^[ \t]+|[ \t]+$/, ""); print; exit}')
 
             xcodebuild \
               -workspace "$BUILD_FILE" \
               -scheme "$SCHEME" \
               -configuration Release \
               -sdk iphoneos \
-              -archivePath "$ARCHIVE_PATH" \
+              -archivePath "$CM_BUILD_DIR/Brahmanand.xcarchive" \
               archive \
               CODE_SIGNING_ALLOWED=NO \
               CODE_SIGNING_REQUIRED=NO
 
           else
+            SCHEME=$(xcodebuild \
+              -project "$BUILD_FILE" \
+              -list 2>/dev/null |
+              awk '/Schemes:/{getline; gsub(/^[ \t]+|[ \t]+$/, ""); print; exit}')
 
             xcodebuild \
               -project "$BUILD_FILE" \
               -scheme "$SCHEME" \
               -configuration Release \
               -sdk iphoneos \
-              -archivePath "$ARCHIVE_PATH" \
+              -archivePath "$CM_BUILD_DIR/Brahmanand.xcarchive" \
               archive \
               CODE_SIGNING_ALLOWED=NO \
               CODE_SIGNING_REQUIRED=NO
-
           fi
 
+      - name: Create IPA
+        script: |
+          set -e
+
+          APP_PATH=$(find "$CM_BUILD_DIR/Brahmanand.xcarchive/Products/Applications" \
+            -maxdepth 1 -name "*.app" -print -quit)
+
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: No .app was produced."
+            exit 1
+          fi
+
+          mkdir -p "$CM_BUILD_DIR/ipa/Payload"
+
+          cp -R "$APP_PATH" "$CM_BUILD_DIR/ipa/Payload/"
+
+          cd "$CM_BUILD_DIR/ipa"
+          zip -qr "$CM_BUILD_DIR/Brahmanand.ipa" Payload
+
     artifacts:
+      - $CM_BUILD_DIR/Brahmanand.ipa
       - $CM_BUILD_DIR/Brahmanand.xcarchive/**
