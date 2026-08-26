@@ -1,53 +1,152 @@
 workflows:
-  react-native-ios:
-    name: Brahmanand School iOS and iPadOS Build
-    max_build_duration: 60
-    instance_type: mac_mini_m1
+  ios-build:
+    name: Brahmanand iOS Build
+
     environment:
-      node: latest
       xcode: latest
       cocoapods: default
+
     scripts:
-      - name: Unzip Project Archive
+      - name: Extract iOS project
         script: |
-          echo "Extracting the app archive..."
-          unzip -o Brahmanand-iOS-Reconstructed-final.zip
-          
-          echo "Locating workspace core paths..."
-          # Find where the project root files actually live
-          PKG_PATH=$(find . -name "package.json" -not -path "*/node_modules/*" | head -n 1)
-          PKG_DIR=$(dirname "$PKG_PATH")
-          
-          # Move all project content directly out to the main execution directory
-          cp -R "$PKG_DIR"/. .
-          rm -rf Brahmanand-iOS-Reconstructed-final.zip
-      - name: Install Node Modules
-        script: |
-          yarn install --no-immutable
+          set -e
+
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No ZIP file found in repository root."
+            exit 1
+          fi
+
+          echo "Using ZIP: $ZIP_FILE"
+
+          rm -rf extracted_project
+          mkdir -p extracted_project
+
+          unzip -q -o "$ZIP_FILE" -d extracted_project
+
+          PROJECT_PATH=$(find extracted_project -type d -name "*.xcodeproj" -print -quit)
+          WORKSPACE_PATH=$(find extracted_project -type d -name "*.xcworkspace" -print -quit)
+
+          if [ -z "$PROJECT_PATH" ] && [ -z "$WORKSPACE_PATH" ]; then
+            echo "ERROR: No .xcodeproj or .xcworkspace found inside ZIP."
+            find extracted_project -maxdepth 4 -type f | head -100
+            exit 1
+          fi
+
+          if [ -n "$WORKSPACE_PATH" ]; then
+            BUILD_DIR=$(dirname "$WORKSPACE_PATH")
+          else
+            BUILD_DIR=$(dirname "$PROJECT_PATH")
+          fi
+
+          echo "$BUILD_DIR" > "$CM_BUILD_DIR/project_dir"
+
+          echo "Project directory:"
+          cat "$CM_BUILD_DIR/project_dir"
+
       - name: Install CocoaPods Dependencies
         script: |
-          XCODE_DIR=$(find . -name "*.xcodeproj" -not -path "*/node_modules/*" | head -n 1 | xargs dirname)
-          cd "$XCODE_DIR"
-          if [ ! -f Podfile ]; then
-            pod init
+          set -e
+
+          PROJECT_DIR=$(cat "$CM_BUILD_DIR/project_dir")
+          cd "$PROJECT_DIR"
+
+          if [ -f "Podfile" ]; then
+            echo "Podfile found."
+            pod install --repo-update
+          else
+            echo "No Podfile found."
+            echo "Continuing because CocoaPods is not required."
           fi
-          pod install
-      - name: Build Unsigned iOS Application
+
+      - name: Find Xcode Scheme
         script: |
-          XCODEPROJECT=$(find . -name "*.xcodeproj" -not -path "*/node_modules/*" | head -n 1)
-          PROJ_DIR=$(dirname "$XCODEPROJECT")
-          cd "$PROJ_DIR"
-          SCHEME_NAME=$(basename "$XCODEPROJECT" .xcodeproj)
-          
-          xcodebuild -project "$SCHEME_NAME.xcodeproj" \
-            -scheme "$SCHEME_NAME" \
-            -configuration Release \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            PROVISIONING_PROFILE="" \
-            clean build
+          set -e
+
+          PROJECT_DIR=$(cat "$CM_BUILD_DIR/project_dir")
+          cd "$PROJECT_DIR"
+
+          WORKSPACE=$(find . -maxdepth 1 -type d -name "*.xcworkspace" -print -quit)
+          PROJECT=$(find . -maxdepth 1 -type d -name "*.xcodeproj" -print -quit)
+
+          if [ -n "$WORKSPACE" ]; then
+            echo "Workspace: $WORKSPACE"
+
+            SCHEME=$(xcodebuild \
+              -workspace "$WORKSPACE" \
+              -list 2>/dev/null |
+              awk '/Schemes:/{flag=1;next} flag && NF{print; exit}' |
+              xargs)
+
+            BUILD_TYPE="workspace"
+            BUILD_FILE="$WORKSPACE"
+
+          elif [ -n "$PROJECT" ]; then
+            echo "Project: $PROJECT"
+
+            SCHEME=$(xcodebuild \
+              -project "$PROJECT" \
+              -list 2>/dev/null |
+              awk '/Schemes:/{flag=1;next} flag && NF{print; exit}' |
+              xargs)
+
+            BUILD_TYPE="project"
+            BUILD_FILE="$PROJECT"
+
+          else
+            echo "ERROR: No Xcode project/workspace found."
+            exit 1
+          fi
+
+          if [ -z "$SCHEME" ]; then
+            echo "ERROR: Could not determine Xcode scheme."
+            exit 1
+          fi
+
+          echo "Scheme: $SCHEME"
+          echo "$BUILD_TYPE" > "$CM_BUILD_DIR/build_type"
+          echo "$BUILD_FILE" > "$CM_BUILD_DIR/build_file"
+          echo "$SCHEME" > "$CM_BUILD_DIR/scheme"
+
+      - name: Build iOS Archive
+        script: |
+          set -e
+
+          PROJECT_DIR=$(cat "$CM_BUILD_DIR/project_dir")
+          BUILD_TYPE=$(cat "$CM_BUILD_DIR/build_type")
+          BUILD_FILE=$(cat "$CM_BUILD_DIR/build_file")
+          SCHEME=$(cat "$CM_BUILD_DIR/scheme")
+
+          cd "$PROJECT_DIR"
+
+          ARCHIVE_PATH="$CM_BUILD_DIR/Brahmanand.xcarchive"
+
+          if [ "$BUILD_TYPE" = "workspace" ]; then
+
+            xcodebuild \
+              -workspace "$BUILD_FILE" \
+              -scheme "$SCHEME" \
+              -configuration Release \
+              -sdk iphoneos \
+              -archivePath "$ARCHIVE_PATH" \
+              archive \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO
+
+          else
+
+            xcodebuild \
+              -project "$BUILD_FILE" \
+              -scheme "$SCHEME" \
+              -configuration Release \
+              -sdk iphoneos \
+              -archivePath "$ARCHIVE_PATH" \
+              archive \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO
+
+          fi
+
     artifacts:
-      - "**/build/Build/Products/Release-iphoneos/*.app"
-      - "**/build/Build/Products/Release-iphoneos/*.ipa"
-      - "**/*.ipa"
+      - $CM_BUILD_DIR/Brahmanand.xcarchive/**
