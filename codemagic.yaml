@@ -10,39 +10,32 @@ workflows:
     scripts:
       - name: Unzip Project Archive
         script: |
-          unzip -o Brahmanand-iOS-Reconstructed.zip
-          echo "=== SHOWING EXTRACTED FILES ==="
-          find . -maxdepth 4 -not -path '*/.*' -not -path '*/node_modules/*'
+          echo "Extracting the actual zip archive..."
+          unzip -o Brahmanand-iOS-Reconstructed-final.zip || unzip -o *.zip
           
-          echo "=== FLATTENING CORES ==="
-          # Find where the actual .xcodeproj folder is hiding and move its parent up to the root
-          XCODE_PATH=$(find . -name "*.xcodeproj" -not -path "*/node_modules/*" | head -n 1)
-          if [ ! -z "$XCODE_PATH" ]; then
-            PARENT_DIR=$(dirname "$XCODE_PATH")
-            echo "Found Xcode project folder in: $PARENT_DIR"
-            cp -R "$PARENT_DIR" ./ios_project_folder
+          echo "Moving nested files up..."
+          # Since it was created on an iPad, it unzips into an inner folder structure
+          # Move everything from the extracted folder to the main directory
+          EXTRACTED_DIR=$(find . -maxdepth 2 -type d -name "BrahmanandPublicSchool*" | head -n 1)
+          if [ -z "$EXTRACTED_DIR" ]; then
+            EXTRACTED_DIR=$(find . -maxdepth 3 -type d -name "iOS" -o -name "ios" | head -n 1 | xargs dirname)
           fi
           
-          # Find where package.json is hiding and copy it to the root
-          PACKAGE_PATH=$(find . -name "package.json" -not -path "*/node_modules/*" | head -n 1)
-          if [ ! -z "$PACKAGE_PATH" ]; then
-            PARENT_PKG=$(dirname "$PACKAGE_PATH")
-            echo "Found package.json in: $PARENT_PKG"
-            cp -R "$PARENT_PKG"/. .
-          fi
+          echo "Target folder found at: $EXTRACTED_DIR"
+          cp -R "$EXTRACTED_DIR"/. . || true
       - name: Install Node Modules
         script: |
           yarn install --no-immutable
       - name: Install CocoaPods Dependencies
         script: |
-          cd ios_project_folder || cd ios || cd iOS || cd *xcodeproj/..
+          cd iOS || cd ios || cd BrahmanandPublicSchool/iOS || cd BrahmanandPublicSchool/ios
           if [ ! -f Podfile ]; then
             pod init
           fi
           pod install
       - name: Build Unsigned iOS Application
         script: |
-          cd ios_project_folder || cd ios || cd iOS || cd *xcodeproj/..
+          cd iOS || cd ios || cd BrahmanandPublicSchool/iOS || cd BrahmanandPublicSchool/ios
           SCHEME_NAME=$(basename *.xcodeproj .xcodeproj)
           xcodebuild -project "$SCHEME_NAME.xcodeproj" \
             -scheme "$SCHEME_NAME" \
