@@ -15,9 +15,9 @@ workflows:
           echo "Aligning internal repository directories..."
           cp -R mnt/data/Brahmanand-iOS-Reconstructed/. .
           rm -rf mnt Brahmanand-iOS-Reconstructed.zip
-      - name: Install Node Modules
+            - name: Install Node Modules
         script: |
-          yarn install
+          yarn install --no-immutable
       - name: Install CocoaPods Dependencies
         script: |
           cd ios && pod install
