@@ -10,21 +10,24 @@ workflows:
     scripts:
       - name: Unzip and Align Project Files
         script: |
-          echo "Extracting project zip archive..."
-          unzip -o Brahmanand-iOS-Reconstructed.zip
-          echo "Aligning internal repository directories..."
-          cp -R mnt/data/Brahmanand-iOS-Reconstructed/. .
-          rm -rf mnt Brahmanand-iOS-Reconstructed.zip
-            - name: Install Node Modules
+          unzip -o *.zip
+      - name: Install Node Modules
         script: |
+          TARGET_DIR=$(find . -name "package.json" -not -path "*/node_modules/*" | head -n 1 | xargs dirname)
+          cd "$TARGET_DIR"
           yarn install --no-immutable
       - name: Install CocoaPods Dependencies
         script: |
-          cd ios && pod install
+          IOS_DIR=$(find . -name "Podfile" -not -path "*/node_modules/*" | head -n 1 | xargs dirname)
+          cd "$IOS_DIR"
+          pod install
       - name: Build Unsigned iOS Application
         script: |
-          xcodebuild -workspace ios/BrahmanandPublicSchool.xcworkspace \
-            -scheme BrahmanandPublicSchool \
+          XCODE_DIR=$(find . -name "*.xcworkspace" -not -path "*/node_modules/*" | head -n 1 | xargs dirname)
+          cd "$XCODE_DIR"
+          SCHEME_NAME=$(basename *.xcworkspace .xcworkspace)
+          xcodebuild -workspace "$SCHEME_NAME.xcworkspace" \
+            -scheme "$SCHEME_NAME" \
             -configuration Release \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
@@ -33,3 +36,5 @@ workflows:
             clean build
     artifacts:
       - ios/build/Build/Products/Release-iphoneos/*.app
+      - ios/*.ipa
+      - "*.ipa"
