@@ -11,23 +11,38 @@ workflows:
       - name: Unzip Project Archive
         script: |
           unzip -o Brahmanand-iOS-Reconstructed.zip
-          # Force copy anything nested deeply up into the working root
-          find . -name "package.json" -not -path "*/node_modules/*" -exec cp -R {}/.. . \; 2>/dev/null || true
-          find . -name "*.xcodeproj" -not -path "*/node_modules/*" -exec cp -R {}/.. . \; 2>/dev/null || true
+          echo "=== SHOWING EXTRACTED FILES ==="
+          find . -maxdepth 4 -not -path '*/.*' -not -path '*/node_modules/*'
+          
+          echo "=== FLATTENING CORES ==="
+          # Find where the actual .xcodeproj folder is hiding and move its parent up to the root
+          XCODE_PATH=$(find . -name "*.xcodeproj" -not -path "*/node_modules/*" | head -n 1)
+          if [ ! -z "$XCODE_PATH" ]; then
+            PARENT_DIR=$(dirname "$XCODE_PATH")
+            echo "Found Xcode project folder in: $PARENT_DIR"
+            cp -R "$PARENT_DIR" ./ios_project_folder
+          fi
+          
+          # Find where package.json is hiding and copy it to the root
+          PACKAGE_PATH=$(find . -name "package.json" -not -path "*/node_modules/*" | head -n 1)
+          if [ ! -z "$PACKAGE_PATH" ]; then
+            PARENT_PKG=$(dirname "$PACKAGE_PATH")
+            echo "Found package.json in: $PARENT_PKG"
+            cp -R "$PARENT_PKG"/. .
+          fi
       - name: Install Node Modules
         script: |
           yarn install --no-immutable
       - name: Install CocoaPods Dependencies
         script: |
-          # Target the native folder layer directly
-          cd ios || cd iOS || cd BrahmanandPublicSchool || cd *xcodeproj/..
+          cd ios_project_folder || cd ios || cd iOS || cd *xcodeproj/..
           if [ ! -f Podfile ]; then
             pod init
           fi
           pod install
       - name: Build Unsigned iOS Application
         script: |
-          cd ios || cd iOS || cd BrahmanandPublicSchool || cd *xcodeproj/..
+          cd ios_project_folder || cd ios || cd iOS || cd *xcodeproj/..
           SCHEME_NAME=$(basename *.xcodeproj .xcodeproj)
           xcodebuild -project "$SCHEME_NAME.xcodeproj" \
             -scheme "$SCHEME_NAME" \
