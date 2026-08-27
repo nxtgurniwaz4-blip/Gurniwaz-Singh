@@ -1,0 +1,57 @@
+workflows:
+  ios-build:
+    name: Brahmanand Public School IPA
+    environment:
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Prepare project
+        script: |
+          set -e
+          ROOT="$CM_BUILD_DIR/project"
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" -print -quit)
+          if [ -z "$ZIP_FILE" ]; then echo "ERROR: No ZIP found"; exit 1; fi
+          unzip -q -o "$ZIP_FILE" -d "$ROOT"
+          # Support either a direct project ZIP or the original outer ZIP containing a project ZIP.
+          INNER=$(find "$ROOT" -type f -name "*.zip" -print -quit)
+          if [ -n "$INNER" ]; then
+            mkdir -p "$ROOT/unpacked"
+            unzip -q -o "$INNER" -d "$ROOT/unpacked"
+          fi
+          PROJECT=$(find "$ROOT" -type d -name "*.xcodeproj" -print -quit)
+          if [ -z "$PROJECT" ]; then echo "ERROR: No .xcodeproj found after extraction"; find "$ROOT" -maxdepth 4 -print; exit 1; fi
+          PROJECT_DIR=$(dirname "$PROJECT")
+          echo "$PROJECT_DIR" > "$CM_BUILD_DIR/project_dir"
+          echo "Project: $PROJECT"
+      - name: Install CocoaPods
+        script: |
+          set -e
+          cd "$(cat "$CM_BUILD_DIR/project_dir")"
+          if [ -f Podfile ]; then pod install; fi
+      - name: Build archive
+        script: |
+          set -e
+          cd "$(cat "$CM_BUILD_DIR/project_dir")"
+          PROJECT=$(find . -maxdepth 1 -type d -name "*.xcodeproj" -print -quit)
+          WORKSPACE=$(find . -maxdepth 1 -type d -name "*.xcworkspace" ! -name "Pods.xcworkspace" -print -quit)
+          if [ -n "$WORKSPACE" ]; then
+            BUILD_ARGS=(-workspace "$WORKSPACE")
+          else
+            BUILD_ARGS=(-project "$PROJECT")
+          fi
+          xcodebuild "${BUILD_ARGS[@]}" -scheme BrahmanandPublicSchool -configuration Release -sdk iphoneos -archivePath "$CM_BUILD_DIR/Brahmanand.xcarchive" archive CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+      - name: Package IPA
+        script: |
+          set -e
+          APP=$(find "$CM_BUILD_DIR/Brahmanand.xcarchive/Products/Applications" -maxdepth 1 -name "*.app" -print -quit)
+          if [ -z "$APP" ]; then echo "ERROR: No .app produced"; exit 1; fi
+          rm -rf "$CM_BUILD_DIR/Payload"
+          mkdir -p "$CM_BUILD_DIR/Payload"
+          cp -R "$APP" "$CM_BUILD_DIR/Payload/"
+          cd "$CM_BUILD_DIR"
+          zip -qr Brahmanand.ipa Payload
+    artifacts:
+      - $CM_BUILD_DIR/Brahmanand.ipa
+      - $CM_BUILD_DIR/Brahmanand.xcarchive/**
