@@ -20,23 +20,25 @@ workflows:
           fi
 
           rm -rf extracted_project
-          mkdir extracted_project
+          mkdir -p extracted_project
 
           unzip -q -o "$ZIP_FILE" -d extracted_project
 
           PROJECT=$(find extracted_project -type d -name "*.xcodeproj" -print -quit)
 
           if [ -z "$PROJECT" ]; then
-            echo "ERROR: No Xcode project found."
+            echo "ERROR: No Xcode project found inside ZIP."
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$PROJECT")
+          PROJECT_NAME=$(basename "$PROJECT")
 
           echo "$PROJECT_DIR" > "$CM_BUILD_DIR/project_dir"
-          echo "$PROJECT" > "$CM_BUILD_DIR/project"
+          echo "$PROJECT_NAME" > "$CM_BUILD_DIR/project_name"
 
-          echo "Project: $PROJECT"
+          echo "Project directory: $PROJECT_DIR"
+          echo "Project name: $PROJECT_NAME"
 
       - name: CocoaPods
         script: |
@@ -46,36 +48,59 @@ workflows:
           cd "$PROJECT_DIR"
 
           if [ -f Podfile ] && grep -qE '^[[:space:]]*pod[[:space:]]' Podfile; then
-            echo "Installing CocoaPods dependencies..."
             pod install
           else
             echo "No CocoaPods dependencies. Skipping."
           fi
 
-      - name: Build IPA
+      - name: Find Scheme
         script: |
           set -e
 
           PROJECT_DIR=$(cat "$CM_BUILD_DIR/project_dir")
-          PROJECT=$(cat "$CM_BUILD_DIR/project")
+          PROJECT_NAME=$(cat "$CM_BUILD_DIR/project_name")
 
           cd "$PROJECT_DIR"
 
+          echo "Checking project:"
+          pwd
+          ls -la
+
+          xcodebuild -project "$PROJECT_NAME" -list
+
           SCHEME=$(xcodebuild \
-            -project "$PROJECT" \
+            -project "$PROJECT_NAME" \
             -list 2>/dev/null |
-            awk '/Schemes:/{getline; gsub(/^[ \t]+|[ \t]+$/, ""); print; exit}')
+            awk '
+              /Schemes:/ {
+                getline
+                gsub(/^[ \t]+|[ \t]+$/, "")
+                print
+                exit
+              }
+            ')
 
           if [ -z "$SCHEME" ]; then
             echo "ERROR: Could not find Xcode scheme."
-            xcodebuild -project "$PROJECT" -list
             exit 1
           fi
 
-          echo "Building scheme: $SCHEME"
+          echo "$SCHEME" > "$CM_BUILD_DIR/scheme"
+
+          echo "Using scheme: $SCHEME"
+
+      - name: Build Archive
+        script: |
+          set -e
+
+          PROJECT_DIR=$(cat "$CM_BUILD_DIR/project_dir")
+          PROJECT_NAME=$(cat "$CM_BUILD_DIR/project_name")
+          SCHEME=$(cat "$CM_BUILD_DIR/scheme")
+
+          cd "$PROJECT_DIR"
 
           xcodebuild \
-            -project "$PROJECT" \
+            -project "$PROJECT_NAME" \
             -scheme "$SCHEME" \
             -configuration Release \
             -sdk iphoneos \
@@ -84,7 +109,7 @@ workflows:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
 
-      - name: Package IPA
+      - name: Create IPA
         script: |
           set -e
 
@@ -95,12 +120,12 @@ workflows:
             -print -quit)
 
           if [ -z "$APP" ]; then
-            echo "ERROR: Xcode did not produce an .app."
+            echo "ERROR: No .app was produced."
             exit 1
           fi
 
           rm -rf "$CM_BUILD_DIR/Payload"
-          mkdir "$CM_BUILD_DIR/Payload"
+          mkdir -p "$CM_BUILD_DIR/Payload"
 
           cp -R "$APP" "$CM_BUILD_DIR/Payload/"
 
@@ -108,8 +133,11 @@ workflows:
 
           zip -qr Brahmanand.ipa Payload
 
-          echo "IPA created:"
+          echo "================================"
+          echo "IPA CREATED SUCCESSFULLY"
+          echo "================================"
           ls -lh Brahmanand.ipa
 
     artifacts:
       - $CM_BUILD_DIR/Brahmanand.ipa
+      - $CM_BUILD_DIR/Brahmanand.xcarchive/**
