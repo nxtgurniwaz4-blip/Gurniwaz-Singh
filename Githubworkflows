@@ -1,0 +1,392 @@
+name: Build iOS Home APK
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Create project files
+        run: |
+          mkdir -p proj/app/src/main/java/com/iosclone/home
+          cd proj
+          cat > settings.gradle <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "iOSHome"
+          include ':app'
+          EOF
+          cat > build.gradle <<'EOF'
+          plugins { id 'com.android.application' version '8.5.2' apply false }
+          EOF
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g
+          android.useAndroidX=false
+          EOF
+          cat > app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.iosclone.home'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "com.iosclone.home"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          tasks.withType(JavaCompile) { options.encoding = 'UTF-8' }
+          EOF
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <queries>
+                  <intent><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent>
+                  <intent><action android:name="android.intent.action.DIAL"/></intent>
+                  <intent><action android:name="android.intent.action.VIEW"/><data android:scheme="https"/></intent>
+                  <intent><action android:name="android.intent.action.SENDTO"/><data android:scheme="smsto"/></intent>
+                  <intent><action android:name="android.media.action.IMAGE_CAPTURE"/></intent>
+              </queries>
+              <application android:label="iOS Home" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"
+                      android:stateNotNeeded="true" android:screenOrientation="portrait">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.HOME"/>
+                          <category android:name="android.intent.category.DEFAULT"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+          cat > app/src/main/java/com/iosclone/home/MainActivity.java <<'EOF'
+          package com.iosclone.home;
+
+          import android.app.Activity;
+          import android.content.*;
+          import android.content.pm.*;
+          import android.graphics.*;
+          import android.graphics.drawable.*;
+          import android.net.Uri;
+          import android.os.*;
+          import android.provider.MediaStore;
+          import android.provider.Settings;
+          import android.text.TextUtils;
+          import android.view.*;
+          import android.widget.*;
+          import java.text.SimpleDateFormat;
+          import java.util.*;
+
+          public class MainActivity extends Activity {
+              float d; int sbh, W, H, pageCount, settled;
+              FrameLayout root, lock, cc; HorizontalScrollView pager; LinearLayout dots;
+              TextView lt, ld, wt, wd;
+              Handler h = new Handler(Looper.getMainLooper());
+              Runnable tick = new Runnable() { public void run() { upd(); h.postDelayed(this, 10000); } };
+
+              int dp(float v) { return (int) (v * d + .5f); }
+              GradientDrawable rr(int c, float r) { GradientDrawable g = new GradientDrawable(); g.setColor(c); g.setCornerRadius(dp(r)); return g; }
+              TextView tv(String s, float sp, int color) {
+                  TextView t = new TextView(this); t.setText(s); t.setTextSize(sp); t.setTextColor(color);
+                  t.setShadowLayer(3, 0, 1, 0x55000000); return t;
+              }
+
+              @Override protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  d = getResources().getDisplayMetrics().density;
+                  W = getResources().getDisplayMetrics().widthPixels;
+                  H = getResources().getDisplayMetrics().heightPixels;
+                  int id = getResources().getIdentifier("status_bar_height", "dimen", "android");
+                  sbh = id > 0 ? getResources().getDimensionPixelSize(id) : dp(24);
+                  getWindow().setStatusBarColor(Color.TRANSPARENT);
+                  getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
+                  root = new FrameLayout(this);
+                  root.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{0xFF5B7CFA, 0xFFB86ADF, 0xFFFF8E72}));
+                  setContentView(root);
+                  buildHome(); buildCC(); buildLock();
+                  BroadcastReceiver br = new BroadcastReceiver() {
+                      public void onReceive(Context c, Intent i) {
+                          cc.setVisibility(View.GONE);
+                          lock.animate().cancel(); lock.setTranslationY(0); lock.setVisibility(View.VISIBLE);
+                      }
+                  };
+                  IntentFilter f = new IntentFilter(Intent.ACTION_SCREEN_OFF);
+                  if (Build.VERSION.SDK_INT >= 33) registerReceiver(br, f, Context.RECEIVER_EXPORTED); else registerReceiver(br, f);
+                  upd(); h.postDelayed(tick, 10000);
+              }
+
+              void upd() {
+                  Date n = new Date();
+                  String tm = new SimpleDateFormat("h:mm", Locale.getDefault()).format(n);
+                  String dt = new SimpleDateFormat("EEEE, d MMMM", Locale.getDefault()).format(n);
+                  lt.setText(tm); ld.setText(dt); wt.setText(tm); wd.setText(dt);
+              }
+
+              void buildHome() {
+                  LinearLayout col = new LinearLayout(this); col.setOrientation(LinearLayout.VERTICAL); col.setPadding(0, sbh, 0, 0);
+                  root.addView(col, new FrameLayout.LayoutParams(-1, -1));
+                  pager = new HorizontalScrollView(this); pager.setHorizontalScrollBarEnabled(false); pager.setOverScrollMode(View.OVER_SCROLL_NEVER);
+                  LinearLayout row = new LinearLayout(this);
+                  pager.addView(row, new FrameLayout.LayoutParams(-2, -1));
+                  col.addView(pager, new LinearLayout.LayoutParams(-1, 0, 1f));
+                  dots = new LinearLayout(this); dots.setGravity(Gravity.CENTER);
+                  col.addView(dots, new LinearLayout.LayoutParams(-1, dp(26)));
+                  LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(-1, -2);
+                  dl.setMargins(dp(14), 0, dp(14), dp(10));
+                  col.addView(buildDock(), dl);
+
+                  PackageManager pm = getPackageManager();
+                  List<ResolveInfo> apps = pm.queryIntentActivities(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0);
+                  Collections.sort(apps, (a1, a2) -> a1.loadLabel(pm).toString().compareToIgnoreCase(a2.loadLabel(pm).toString()));
+                  List<ResolveInfo> list = new ArrayList<>();
+                  for (ResolveInfo ri : apps) if (!ri.activityInfo.packageName.equals(getPackageName())) list.add(ri);
+
+                  int rowH = dp(100);
+                  int avail = H - sbh - dp(26) - dp(100) - dp(10);
+                  int rows = Math.max(3, avail / rowH);
+                  int idx = 0, p = 0;
+                  while (idx < list.size() || p == 0) {
+                      int rowsHere = p == 0 ? rows - 1 : rows;
+                      LinearLayout page = new LinearLayout(this); page.setOrientation(LinearLayout.VERTICAL); page.setPadding(dp(12), dp(8), dp(12), 0);
+                      if (p == 0) {
+                          LinearLayout.LayoutParams wl = new LinearLayout.LayoutParams(-1, rowH - dp(10));
+                          wl.bottomMargin = dp(10);
+                          page.addView(buildWidget(), wl);
+                      }
+                      for (int rIdx = 0; rIdx < rowsHere && idx < list.size(); rIdx++) {
+                          LinearLayout line = new LinearLayout(this);
+                          for (int c = 0; c < 4; c++) {
+                              if (idx < list.size()) line.addView(cell(list.get(idx++), pm), new LinearLayout.LayoutParams(0, rowH, 1f));
+                              else line.addView(new View(this), new LinearLayout.LayoutParams(0, rowH, 1f));
+                          }
+                          page.addView(line, new LinearLayout.LayoutParams(-1, rowH));
+                      }
+                      row.addView(page, new LinearLayout.LayoutParams(W, -1));
+                      p++;
+                  }
+                  pageCount = p;
+                  for (int i = 0; i < pageCount; i++) {
+                      View dv = new View(this);
+                      LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(7), dp(7));
+                      lp.setMargins(dp(4), 0, dp(4), 0);
+                      dots.addView(dv, lp);
+                  }
+                  setDots(0);
+                  pager.setOnScrollChangeListener((vw, x, y, ox, oy) -> setDots(Math.round(x / (float) W)));
+                  pager.setOnTouchListener((vw, e) -> {
+                      int a = e.getActionMasked();
+                      if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+                          int dx = pager.getScrollX() - settled * W;
+                          int pg = settled + (dx > W * 0.12f ? 1 : dx < -W * 0.12f ? -1 : 0);
+                          settled = Math.max(0, Math.min(pageCount - 1, pg));
+                          pager.smoothScrollTo(settled * W, 0);
+                          return true;
+                      }
+                      return false;
+                  });
+
+                  View strip = new View(this);
+                  FrameLayout.LayoutParams sl = new FrameLayout.LayoutParams(-1, dp(40));
+                  sl.topMargin = sbh;
+                  root.addView(strip, sl);
+                  final float[] y0 = {0};
+                  strip.setOnTouchListener((vw, e) -> {
+                      if (e.getActionMasked() == MotionEvent.ACTION_DOWN) y0[0] = e.getRawY();
+                      else if (e.getActionMasked() == MotionEvent.ACTION_MOVE && e.getRawY() - y0[0] > dp(40) && cc.getVisibility() != View.VISIBLE) openCC();
+                      return true;
+                  });
+              }
+
+              void setDots(int cur) {
+                  for (int i = 0; i < dots.getChildCount(); i++) {
+                      GradientDrawable g = new GradientDrawable(); g.setShape(GradientDrawable.OVAL);
+                      g.setColor(i == cur ? 0xFFFFFFFF : 0x66FFFFFF);
+                      dots.getChildAt(i).setBackground(g);
+                  }
+              }
+
+              View icon(Drawable dr) {
+                  FrameLayout f = new FrameLayout(this);
+                  ImageView iv = new ImageView(this); iv.setImageDrawable(dr);
+                  if (Build.VERSION.SDK_INT >= 26 && dr instanceof AdaptiveIconDrawable) {
+                      f.setBackgroundColor(0xFF2B2B30); iv.setScaleX(1.33f); iv.setScaleY(1.33f);
+                  } else {
+                      f.setBackgroundColor(0xFFFFFFFF); iv.setPadding(dp(6), dp(6), dp(6), dp(6));
+                  }
+                  f.addView(iv, new FrameLayout.LayoutParams(-1, -1));
+                  f.setClipToOutline(true);
+                  f.setOutlineProvider(new ViewOutlineProvider() {
+                      public void getOutline(View vw, Outline o) { o.setRoundRect(0, 0, vw.getWidth(), vw.getHeight(), vw.getWidth() * 0.225f); }
+                  });
+                  return f;
+              }
+
+              View cell(ResolveInfo ri, PackageManager pm) {
+                  LinearLayout c = new LinearLayout(this); c.setOrientation(LinearLayout.VERTICAL);
+                  c.setGravity(Gravity.CENTER_HORIZONTAL); c.setPadding(0, dp(6), 0, 0);
+                  c.addView(icon(ri.loadIcon(pm)), new LinearLayout.LayoutParams(dp(60), dp(60)));
+                  TextView t = tv(ri.loadLabel(pm).toString(), 11, 0xFFFFFFFF);
+                  t.setSingleLine(); t.setEllipsize(TextUtils.TruncateAt.END); t.setGravity(Gravity.CENTER);
+                  LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.topMargin = dp(5);
+                  c.addView(t, lp);
+                  final String pkg = ri.activityInfo.packageName, cls = ri.activityInfo.name;
+                  c.setOnClickListener(vw -> {
+                      try {
+                          startActivity(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                              .setClassName(pkg, cls).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED));
+                      } catch (Exception ex) { }
+                  });
+                  c.setOnLongClickListener(vw -> {
+                      try { startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + pkg)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); } catch (Exception ex) { }
+                      return true;
+                  });
+                  return c;
+              }
+
+              View buildDock() {
+                  LinearLayout dk = new LinearLayout(this); dk.setBackground(rr(0x40FFFFFF, 30)); dk.setPadding(dp(10), dp(12), dp(10), dp(12));
+                  Intent[] its = {
+                      new Intent(Intent.ACTION_DIAL),
+                      new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com")),
+                      new Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:")),
+                      new Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+                  };
+                  PackageManager pm = getPackageManager();
+                  for (Intent it : its) {
+                      List<ResolveInfo> l = pm.queryIntentActivities(it, PackageManager.MATCH_DEFAULT_ONLY);
+                      if (l.isEmpty()) continue;
+                      ResolveInfo ri = l.get(0);
+                      it.setClassName(ri.activityInfo.packageName, ri.activityInfo.name);
+                      it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                      FrameLayout slot = new FrameLayout(this);
+                      slot.addView(icon(ri.loadIcon(pm)), new FrameLayout.LayoutParams(dp(60), dp(60), Gravity.CENTER));
+                      slot.setOnClickListener(vw -> { try { startActivity(it); } catch (Exception ex) { } });
+                      dk.addView(slot, new LinearLayout.LayoutParams(0, dp(60), 1f));
+                  }
+                  return dk;
+              }
+
+              View buildWidget() {
+                  LinearLayout w = new LinearLayout(this); w.setOrientation(LinearLayout.VERTICAL);
+                  w.setBackground(rr(0x40FFFFFF, 22)); w.setPadding(dp(18), dp(10), dp(18), dp(10)); w.setGravity(Gravity.CENTER_VERTICAL);
+                  wt = tv("", 34, 0xFFFFFFFF); wt.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+                  wd = tv("", 14, 0xE6FFFFFF);
+                  w.addView(wt); w.addView(wd);
+                  return w;
+              }
+
+              void buildCC() {
+                  cc = new FrameLayout(this); cc.setBackgroundColor(0xEE101020); cc.setVisibility(View.GONE);
+                  LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setGravity(Gravity.CENTER_HORIZONTAL);
+                  box.setPadding(0, sbh + dp(60), 0, 0);
+                  String[][] tiles = {
+                      {"\uD83D\uDCF6", "Wi-Fi", Settings.ACTION_WIFI_SETTINGS},
+                      {"\uD83D\uDD35", "Bluetooth", Settings.ACTION_BLUETOOTH_SETTINGS},
+                      {"\u2708\uFE0F", "Airplane", Settings.ACTION_AIRPLANE_MODE_SETTINGS},
+                      {"\uD83D\uDCE1", "Network", Settings.ACTION_WIRELESS_SETTINGS},
+                      {"\uD83D\uDD06", "Display", Settings.ACTION_DISPLAY_SETTINGS},
+                      {"\uD83D\uDD0A", "Sound", Settings.ACTION_SOUND_SETTINGS}
+                  };
+                  for (int r = 0; r < 2; r++) {
+                      LinearLayout line = new LinearLayout(this);
+                      for (int c = 0; c < 3; c++) {
+                          final String[] t = tiles[r * 3 + c];
+                          LinearLayout tile = new LinearLayout(this); tile.setOrientation(LinearLayout.VERTICAL); tile.setGravity(Gravity.CENTER_HORIZONTAL);
+                          TextView em = tv(t[0], 28, 0xFFFFFFFF); em.setGravity(Gravity.CENTER); em.setBackground(rr(0x33FFFFFF, 22));
+                          tile.addView(em, new LinearLayout.LayoutParams(dp(76), dp(76)));
+                          LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(-2, -2); ll.topMargin = dp(6);
+                          tile.addView(tv(t[1], 11, 0xFFFFFFFF), ll);
+                          tile.setOnClickListener(vw -> {
+                              try { startActivity(new Intent(t[2]).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); } catch (Exception ex) { }
+                              closeCC();
+                          });
+                          LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(-2, -2);
+                          tl.setMargins(dp(12), dp(10), dp(12), dp(10));
+                          line.addView(tile, tl);
+                      }
+                      box.addView(line);
+                  }
+                  cc.addView(box, new FrameLayout.LayoutParams(-1, -1));
+                  final float[] y0 = {0};
+                  cc.setOnTouchListener((vw, e) -> {
+                      int a = e.getActionMasked();
+                      if (a == MotionEvent.ACTION_DOWN) y0[0] = e.getRawY();
+                      if (a == MotionEvent.ACTION_UP) {
+                          float dy = e.getRawY() - y0[0];
+                          if (dy < -dp(60) || Math.abs(dy) < dp(10)) closeCC();
+                      }
+                      return true;
+                  });
+                  root.addView(cc, new FrameLayout.LayoutParams(-1, -1));
+              }
+
+              void openCC() {
+                  cc.setTranslationY(-H); cc.setVisibility(View.VISIBLE);
+                  cc.animate().translationY(0).setDuration(220);
+              }
+
+              void closeCC() {
+                  cc.animate().translationY(-H).setDuration(200).withEndAction(() -> cc.setVisibility(View.GONE));
+              }
+
+              void buildLock() {
+                  lock = new FrameLayout(this);
+                  lock.setBackground(new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{0xFF3A4FBF, 0xFF8E4FD0, 0xFFFF7A6B}));
+                  LinearLayout c = new LinearLayout(this); c.setOrientation(LinearLayout.VERTICAL); c.setGravity(Gravity.CENTER_HORIZONTAL);
+                  c.setPadding(0, sbh + dp(60), 0, 0);
+                  TextView lk = tv("\uD83D\uDD12", 18, 0xFFFFFFFF);
+                  ld = tv("", 18, 0xE6FFFFFF); ld.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+                  lt = tv("", 84, 0xFFFFFFFF); lt.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL)); lt.setIncludeFontPadding(false);
+                  c.addView(lk); c.addView(ld); c.addView(lt);
+                  lock.addView(c, new FrameLayout.LayoutParams(-1, -1));
+                  TextView hint = tv("Swipe up to unlock", 14, 0xCCFFFFFF);
+                  FrameLayout.LayoutParams hl = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+                  hl.bottomMargin = dp(40);
+                  lock.addView(hint, hl);
+                  final float[] y0 = {0};
+                  lock.setOnTouchListener((vw, e) -> {
+                      int a = e.getActionMasked();
+                      if (a == MotionEvent.ACTION_DOWN) y0[0] = e.getRawY();
+                      else if (a == MotionEvent.ACTION_MOVE) lock.setTranslationY(Math.min(0, e.getRawY() - y0[0]));
+                      else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+                          if (y0[0] - e.getRawY() > H * 0.22f) lock.animate().translationY(-H).setDuration(180).withEndAction(() -> lock.setVisibility(View.GONE));
+                          else lock.animate().translationY(0).setDuration(180);
+                      }
+                      return true;
+                  });
+                  root.addView(lock, new FrameLayout.LayoutParams(-1, -1));
+              }
+
+              @Override protected void onNewIntent(Intent i) {
+                  super.onNewIntent(i);
+                  cc.setVisibility(View.GONE);
+                  settled = 0; pager.smoothScrollTo(0, 0);
+              }
+
+              @Override public void onBackPressed() { if (cc.getVisibility() == View.VISIBLE) closeCC(); }
+          }
+          EOF
+      - name: Build APK
+        run: |
+          cd proj
+          gradle assembleDebug --no-daemon
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ github.run_number }}" proj/app/build/outputs/apk/debug/app-debug.apk --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "iOS Home v${{ github.run_number }}" --notes "Debug APK"
