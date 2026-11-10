@@ -17,7 +17,7 @@ jobs:
           gradle-version: '8.7'
       - name: Create project files
         run: |
-          mkdir -p proj/app/src/main/java/com/iosclone/home
+          mkdir -p proj/app/src/main/java/com/iosclone/home proj/app/src/main/res/drawable proj/app/src/main/res/mipmap-anydpi-v26
           cd proj
           cat > settings.gradle <<'EOF'
           pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
@@ -39,7 +39,7 @@ jobs:
               compileSdk 34
               defaultConfig {
                   applicationId "com.iosclone.home"
-                  minSdk 24
+                  minSdk 26
                   targetSdk 34
                   versionCode 1
                   versionName "1.0"
@@ -55,6 +55,8 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.WRITE_SETTINGS"/>
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+              <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES"/>
               <queries>
                   <intent><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent>
                   <intent><action android:name="android.intent.action.DIAL"/></intent>
@@ -62,7 +64,7 @@ jobs:
                   <intent><action android:name="android.intent.action.SENDTO"/><data android:scheme="smsto"/></intent>
                   <intent><action android:name="android.media.action.IMAGE_CAPTURE"/></intent>
               </queries>
-              <application android:label="iOS Home" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+              <application android:label="iOS Home" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
                   <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"
                       android:stateNotNeeded="true" android:screenOrientation="portrait" android:windowSoftInputMode="adjustPan">
                       <intent-filter>
@@ -74,6 +76,37 @@ jobs:
                   </activity>
               </application>
           </manifest>
+          EOF
+          cat > app/src/main/res/drawable/ic_launcher_background.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+              <path android:pathData="M0,0h108v108h-108z">
+                  <aapt:attr name="android:fillColor">
+                      <gradient android:startX="0" android:startY="0" android:endX="108" android:endY="108" android:type="linear">
+                          <item android:offset="0" android:color="#FF4F7CFF"/>
+                          <item android:offset="0.55" android:color="#FF9B5CF6"/>
+                          <item android:offset="1" android:color="#FFFF7A59"/>
+                      </gradient>
+                  </aapt:attr>
+              </path>
+          </vector>
+          EOF
+          cat > app/src/main/res/drawable/ic_launcher_foreground.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+              <path android:fillColor="#FFFFFFFF" android:pathData="M37,31 H45 A6,6 0 0 1 51,37 V45 A6,6 0 0 1 45,51 H37 A6,6 0 0 1 31,45 V37 A6,6 0 0 1 37,31 Z"/>
+              <path android:fillColor="#E6FFFFFF" android:pathData="M63,31 H71 A6,6 0 0 1 77,37 V45 A6,6 0 0 1 71,51 H63 A6,6 0 0 1 57,45 V37 A6,6 0 0 1 63,31 Z"/>
+              <path android:fillColor="#E6FFFFFF" android:pathData="M37,57 H45 A6,6 0 0 1 51,63 V71 A6,6 0 0 1 45,77 H37 A6,6 0 0 1 31,71 V63 A6,6 0 0 1 37,57 Z"/>
+              <path android:fillColor="#FFFFD60A" android:pathData="M57,67 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0 Z"/>
+          </vector>
+          EOF
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@drawable/ic_launcher_background"/>
+              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+              <monochrome android:drawable="@drawable/ic_launcher_foreground"/>
+          </adaptive-icon>
           EOF
           cat > app/src/main/java/com/iosclone/home/MainActivity.java <<'EOF'
           package com.iosclone.home;
@@ -87,6 +120,8 @@ jobs:
           import android.graphics.drawable.*;
           import android.hardware.camera2.CameraManager;
           import android.media.AudioManager;
+          import android.net.ConnectivityManager;
+          import android.net.NetworkCapabilities;
           import android.net.Uri;
           import android.os.*;
           import android.provider.AlarmClock;
@@ -96,6 +131,7 @@ jobs:
           import android.text.TextUtils;
           import android.text.TextWatcher;
           import android.view.*;
+          import android.view.animation.OvershootInterpolator;
           import android.view.inputmethod.InputMethodManager;
           import android.widget.*;
           import java.text.SimpleDateFormat;
@@ -110,11 +146,14 @@ jobs:
               float d; int sbh, W, H, pageCount, settled;
               FrameLayout root, lock, cc, search; HorizontalScrollView pager; LinearLayout dots, results;
               TextView lt, ld, wt, wd, torchTile; EditText searchEt; SeekBar bright, vol;
-              boolean torch, askedWrite;
+              boolean torch, askedWrite, gTracking, gFired;
+              float gx, gy;
+              TextView sbTime, sbBat; WifiView wifi;
+              List<ResolveInfo> curList;
               List<ResolveInfo> allApps = new ArrayList<>();
               PackageManager pm; SharedPreferences prefs; AudioManager am;
               Handler h = new Handler(Looper.getMainLooper());
-              Runnable tick = new Runnable() { public void run() { upd(); h.postDelayed(this, 10000); } };
+              Runnable tick = new Runnable() { public void run() { upd(); h.postDelayed(this, 5000); } };
 
               int dp(float v) { return (int) (v * d + .5f); }
               GradientDrawable rr(int c, float r) { GradientDrawable g = new GradientDrawable(); g.setColor(c); g.setCornerRadius(dp(r)); return g; }
@@ -132,12 +171,16 @@ jobs:
                   pm = getPackageManager(); prefs = getSharedPreferences("p", 0); am = (AudioManager) getSystemService(AUDIO_SERVICE);
                   int id = getResources().getIdentifier("status_bar_height", "dimen", "android");
                   sbh = id > 0 ? getResources().getDimensionPixelSize(id) : dp(24);
-                  getWindow().setStatusBarColor(Color.TRANSPARENT);
-                  getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
+                  if (Build.VERSION.SDK_INT >= 28) {
+                      WindowManager.LayoutParams wlp = getWindow().getAttributes();
+                      wlp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                      getWindow().setAttributes(wlp);
+                  }
+                  hideBars();
                   root = new FrameLayout(this);
                   root.setBackground(wall(prefs.getInt("wp", 0)));
                   setContentView(root);
-                  buildHome(); buildSearch(); buildCC(); buildLock();
+                  buildHome(); buildSearch(); buildCC(); buildLock(); buildStatus();
                   BroadcastReceiver br = new BroadcastReceiver() {
                       public void onReceive(Context c, Intent i) {
                           cc.setVisibility(View.GONE); search.setVisibility(View.GONE);
@@ -146,16 +189,23 @@ jobs:
                   };
                   IntentFilter f = new IntentFilter(Intent.ACTION_SCREEN_OFF);
                   if (Build.VERSION.SDK_INT >= 33) registerReceiver(br, f, Context.RECEIVER_EXPORTED); else registerReceiver(br, f);
-                  upd(); h.postDelayed(tick, 10000);
+                  upd(); h.postDelayed(tick, 5000);
               }
 
               void upd() {
                   Date n = new Date();
                   String tm = new SimpleDateFormat("h:mm", Locale.getDefault()).format(n);
-                  String dt = new SimpleDateFormat("EEEE, d MMMM", Locale.getDefault()).format(n);
+                  String dt = new SimpleDateFormat("EEEE d MMMM", Locale.getDefault()).format(n);
                   int lvl = 0;
                   try { lvl = ((BatteryManager) getSystemService(BATTERY_SERVICE)).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY); } catch (Exception ex) { }
-                  lt.setText(tm); ld.setText(dt); wt.setText(tm); wd.setText(dt + "  \u00B7  \uD83D\uDD0B " + lvl + "%");
+                  boolean wf = false;
+                  try {
+                      ConnectivityManager cmg = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+                      NetworkCapabilities nc = cmg.getNetworkCapabilities(cmg.getActiveNetwork());
+                      wf = nc != null && nc.hasTransport(NetworkCapabilities.TRANSPORT_WIFI);
+                  } catch (Exception ex) { }
+                  lt.setText(tm); ld.setText(dt); wt.setText(tm); wd.setText(dt);
+                  sbTime.setText(tm); sbBat.setText(lvl + "%"); wifi.on = wf; wifi.invalidate();
               }
 
               void launch(View src, String pkg, String cls) {
@@ -194,10 +244,11 @@ jobs:
                   int rows = Math.max(3, avail / rowH);
                   int idx = 0, p = 0;
                   while (idx < allApps.size() || p == 0) {
-                      int rowsHere = p == 0 ? rows - 1 : rows;
+                      int wh = dp(215);
+                      int rowsHere = p == 0 ? Math.max(1, (avail - wh - dp(18)) / rowH) : rows;
                       LinearLayout page = new LinearLayout(this); page.setOrientation(LinearLayout.VERTICAL); page.setPadding(dp(12), dp(8), dp(12), 0);
                       if (p == 0) {
-                          LinearLayout.LayoutParams wl = new LinearLayout.LayoutParams(-1, rowH - dp(10));
+                          LinearLayout.LayoutParams wl = new LinearLayout.LayoutParams(-1, wh);
                           wl.bottomMargin = dp(10);
                           page.addView(buildWidget(), wl);
                       }
@@ -212,6 +263,8 @@ jobs:
                       row.addView(page, new LinearLayout.LayoutParams(W, -1));
                       p++;
                   }
+                  row.addView(libraryPage(), new LinearLayout.LayoutParams(W, -1));
+                  p++;
                   pageCount = p;
                   for (int i = 0; i < pageCount; i++) {
                       View dv = new View(this);
@@ -231,17 +284,6 @@ jobs:
                           return true;
                       }
                       return false;
-                  });
-
-                  View strip = new View(this);
-                  FrameLayout.LayoutParams sl = new FrameLayout.LayoutParams(-1, dp(40));
-                  sl.topMargin = sbh;
-                  root.addView(strip, sl);
-                  final float[] y0 = {0};
-                  strip.setOnTouchListener((vw, e) -> {
-                      if (e.getActionMasked() == MotionEvent.ACTION_DOWN) y0[0] = e.getRawY();
-                      else if (e.getActionMasked() == MotionEvent.ACTION_MOVE && e.getRawY() - y0[0] > dp(40) && cc.getVisibility() != View.VISIBLE) openCC();
-                      return true;
                   });
               }
 
@@ -280,13 +322,14 @@ jobs:
                   final String pkg = ri.activityInfo.packageName, cls = ri.activityInfo.name;
                   c.setOnClickListener(vw -> launch(vw, pkg, cls));
                   c.setOnLongClickListener(vw -> {
-                      try { startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + pkg)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); } catch (Exception ex) { }
+                      vw.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+                      menu(vw, pkg);
                       return true;
                   });
                   c.setOnTouchListener((vw, e) -> {
                       int a = e.getActionMasked();
                       if (a == MotionEvent.ACTION_DOWN) vw.animate().scaleX(.9f).scaleY(.9f).setDuration(80);
-                      else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) vw.animate().scaleX(1f).scaleY(1f).setDuration(120);
+                      else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) vw.animate().scaleX(1f).scaleY(1f).setDuration(220).setInterpolator(new OvershootInterpolator(3f));
                       return false;
                   });
                   return c;
@@ -317,11 +360,12 @@ jobs:
               }
 
               View buildWidget() {
-                  LinearLayout w = new LinearLayout(this); w.setOrientation(LinearLayout.VERTICAL);
-                  w.setBackground(rr(0x40FFFFFF, 22)); w.setPadding(dp(18), dp(8), dp(18), dp(8)); w.setGravity(Gravity.CENTER_VERTICAL);
-                  wt = tv("", 32, 0xFFFFFFFF); wt.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-                  wd = tv("", 13, 0xE6FFFFFF);
-                  w.addView(wt); w.addView(wd);
+                  LinearLayout w = new LinearLayout(this); w.setOrientation(LinearLayout.VERTICAL); w.setGravity(Gravity.CENTER_HORIZONTAL);
+                  wd = tv("", 16, 0xE6FFFFFF); wd.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL)); wd.setGravity(Gravity.CENTER);
+                  wt = tv("", 88, 0xFFFFFFFF); wt.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+                  wt.setGravity(Gravity.CENTER); wt.setIncludeFontPadding(false); wt.setPivotY(0); wt.setScaleY(1.75f);
+                  w.addView(wd, new LinearLayout.LayoutParams(-1, -2));
+                  w.addView(wt, new LinearLayout.LayoutParams(-1, -2));
                   w.setOnLongClickListener(vw -> {
                       int n = (prefs.getInt("wp", 0) + 1) % WP.length;
                       prefs.edit().putInt("wp", n).apply();
@@ -353,7 +397,7 @@ jobs:
               void fill(String q) {
                   results.removeAllViews();
                   int count = 0;
-                  for (ResolveInfo ri : allApps) {
+                  for (ResolveInfo ri : (curList == null ? allApps : curList)) {
                       String label = ri.loadLabel(pm).toString();
                       if (!q.isEmpty() && !label.toLowerCase().contains(q)) continue;
                       LinearLayout rw = new LinearLayout(this); rw.setGravity(Gravity.CENTER_VERTICAL); rw.setPadding(0, dp(6), 0, dp(6));
@@ -363,11 +407,12 @@ jobs:
                       final String pkg = ri.activityInfo.packageName, cls = ri.activityInfo.name;
                       rw.setOnClickListener(vw -> { closeSearch(); launch(vw, pkg, cls); });
                       results.addView(rw);
-                      if (++count >= 12) break;
+                      if (++count >= 80) break;
                   }
               }
 
               void openSearch() {
+                  curList = allApps; searchEt.setHint("Search apps");
                   search.setVisibility(View.VISIBLE); searchEt.setText(""); fill("");
                   searchEt.requestFocus();
                   h.postDelayed(() -> ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).showSoftInput(searchEt, 0), 150);
@@ -484,7 +529,7 @@ jobs:
                   try { bright.setProgress(Settings.System.getInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS, 128)); } catch (Exception ex) { }
                   vol.setProgress(am.getStreamVolume(AudioManager.STREAM_MUSIC));
                   cc.setTranslationY(-H); cc.setVisibility(View.VISIBLE);
-                  cc.animate().translationY(0).setDuration(220);
+                  cc.animate().translationY(0).setDuration(300).setInterpolator(new OvershootInterpolator(0.7f));
               }
 
               void closeCC() {
@@ -497,8 +542,9 @@ jobs:
                   LinearLayout c = new LinearLayout(this); c.setOrientation(LinearLayout.VERTICAL); c.setGravity(Gravity.CENTER_HORIZONTAL);
                   c.setPadding(0, sbh + dp(60), 0, 0);
                   TextView lk = tv("\uD83D\uDD12", 18, 0xFFFFFFFF);
-                  ld = tv("", 18, 0xE6FFFFFF); ld.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-                  lt = tv("", 84, 0xFFFFFFFF); lt.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL)); lt.setIncludeFontPadding(false);
+                  ld = tv("", 16, 0xE6FFFFFF); ld.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+                  lt = tv("", 92, 0xFFFFFFFF); lt.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL)); lt.setIncludeFontPadding(false);
+                  lt.setPivotY(0); lt.setScaleY(1.7f);
                   c.addView(lk); c.addView(ld); c.addView(lt);
                   lock.addView(c, new FrameLayout.LayoutParams(-1, -1));
                   TextView hint = tv("Swipe up to unlock", 14, 0xCCFFFFFF);
@@ -529,6 +575,160 @@ jobs:
                       return true;
                   });
                   root.addView(lock, new FrameLayout.LayoutParams(-1, -1));
+              }
+
+              void showList(String title, List<ResolveInfo> l) {
+                  curList = l; searchEt.setHint(title);
+                  search.setVisibility(View.VISIBLE); searchEt.setText(""); fill("");
+              }
+
+              String catName(int c) {
+                  if (c == ApplicationInfo.CATEGORY_SOCIAL) return "Social";
+                  if (c == ApplicationInfo.CATEGORY_GAME) return "Games";
+                  if (c == ApplicationInfo.CATEGORY_AUDIO) return "Music";
+                  if (c == ApplicationInfo.CATEGORY_VIDEO) return "Video";
+                  if (c == ApplicationInfo.CATEGORY_IMAGE) return "Photos";
+                  if (c == ApplicationInfo.CATEGORY_NEWS) return "News";
+                  if (c == ApplicationInfo.CATEGORY_MAPS) return "Travel";
+                  if (c == ApplicationInfo.CATEGORY_PRODUCTIVITY) return "Productivity";
+                  return "Utilities";
+              }
+
+              View libraryPage() {
+                  ScrollView sv = new ScrollView(this); sv.setVerticalScrollBarEnabled(false);
+                  LinearLayout wrap = new LinearLayout(this); wrap.setOrientation(LinearLayout.VERTICAL); wrap.setPadding(dp(12), dp(8), dp(12), dp(16));
+                  TextView title = tv("App Library", 24, 0xFFFFFFFF); title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+                  wrap.addView(title);
+                  String[] names = {"Social", "Games", "Music", "Video", "Photos", "News", "Travel", "Productivity", "Utilities"};
+                  LinkedHashMap<String, List<ResolveInfo>> cats = new LinkedHashMap<>();
+                  for (String nm : names) cats.put(nm, new ArrayList<>());
+                  for (ResolveInfo ri : allApps) cats.get(catName(ri.activityInfo.applicationInfo.category)).add(ri);
+                  int cardW = (W - dp(24) - dp(12)) / 2, mini = (cardW - dp(30)) / 2;
+                  LinearLayout line = null; int n = 0;
+                  for (Map.Entry<String, List<ResolveInfo>> en : cats.entrySet()) {
+                      final List<ResolveInfo> l = en.getValue();
+                      if (l.isEmpty()) continue;
+                      if (n % 2 == 0) {
+                          line = new LinearLayout(this);
+                          LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(-1, -2); ll.topMargin = dp(14);
+                          wrap.addView(line, ll);
+                      }
+                      LinearLayout card = new LinearLayout(this); card.setOrientation(LinearLayout.VERTICAL);
+                      LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL);
+                      box.setBackground(rr(0x40FFFFFF, 22)); box.setPadding(dp(10), dp(10), dp(10), dp(10));
+                      for (int r = 0; r < 2; r++) {
+                          LinearLayout rw = new LinearLayout(this);
+                          for (int c = 0; c < 2; c++) {
+                              int k = r * 2 + c;
+                              View mv = k < l.size() ? icon(l.get(k).loadIcon(pm)) : new View(this);
+                              LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(mini, mini);
+                              ip.setMargins(dp(c == 0 ? 0 : 10), dp(r == 0 ? 0 : 10), 0, 0);
+                              rw.addView(mv, ip);
+                          }
+                          box.addView(rw);
+                      }
+                      card.addView(box);
+                      TextView lb = tv(en.getKey(), 12, 0xFFFFFFFF); lb.setGravity(Gravity.CENTER);
+                      LinearLayout.LayoutParams lbp = new LinearLayout.LayoutParams(-1, -2); lbp.topMargin = dp(5);
+                      card.addView(lb, lbp);
+                      final String catTitle = en.getKey();
+                      card.setOnClickListener(vw -> showList(catTitle, l));
+                      LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(cardW, -2); cp.leftMargin = n % 2 == 0 ? 0 : dp(12);
+                      line.addView(card, cp);
+                      n++;
+                  }
+                  sv.addView(wrap);
+                  return sv;
+              }
+
+              void menu(View anchor, String pkg) {
+                  LinearLayout m = new LinearLayout(this); m.setOrientation(LinearLayout.VERTICAL); m.setBackground(rr(0xF02A2A2E, 14));
+                  final PopupWindow[] pw = new PopupWindow[1];
+                  String[][] items = {{"App Info", "i"}, {"Remove App", "r"}};
+                  for (String[] item : items) {
+                      boolean remove = item[1].equals("r");
+                      TextView t = tv(item[0], 16, remove ? 0xFFFF453A : 0xFFFFFFFF);
+                      t.setShadowLayer(0, 0, 0, 0); t.setPadding(dp(18), dp(13), dp(18), dp(13));
+                      t.setOnClickListener(vw -> {
+                          pw[0].dismiss();
+                          try {
+                              startActivity(remove ? new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + pkg))
+                                  : new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + pkg)));
+                          } catch (Exception ex) { }
+                      });
+                      m.addView(t);
+                      if (!remove) { View dv = new View(this); dv.setBackgroundColor(0x33FFFFFF); m.addView(dv, new LinearLayout.LayoutParams(-1, 1)); }
+                  }
+                  pw[0] = new PopupWindow(m, dp(200), -2, true);
+                  pw[0].setBackgroundDrawable(new ColorDrawable(0)); pw[0].setElevation(dp(12));
+                  int[] loc = new int[2]; anchor.getLocationOnScreen(loc);
+                  int x = Math.max(dp(8), Math.min(W - dp(208), loc[0] + anchor.getWidth() / 2 - dp(100)));
+                  pw[0].showAtLocation(root, Gravity.TOP | Gravity.START, x, loc[1] + anchor.getHeight());
+              }
+
+              void hideBars() {
+                  getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                      | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+              }
+
+              @Override public void onWindowFocusChanged(boolean focus) {
+                  super.onWindowFocusChanged(focus);
+                  if (focus) hideBars();
+              }
+
+              void buildStatus() {
+                  FrameLayout bar = new FrameLayout(this);
+                  sbTime = tv("", 15, 0xFFFFFFFF); sbTime.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+                  FrameLayout.LayoutParams tl = new FrameLayout.LayoutParams(-2, -2, Gravity.START | Gravity.CENTER_VERTICAL);
+                  tl.leftMargin = dp(24);
+                  bar.addView(sbTime, tl);
+                  LinearLayout right = new LinearLayout(this); right.setGravity(Gravity.CENTER_VERTICAL);
+                  wifi = new WifiView(this, d);
+                  right.addView(wifi, new LinearLayout.LayoutParams(dp(18), dp(14)));
+                  sbBat = tv("", 14, 0xFFFFFFFF); sbBat.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+                  LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(-2, -2); bl.leftMargin = dp(8);
+                  right.addView(sbBat, bl);
+                  FrameLayout.LayoutParams rl = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.CENTER_VERTICAL);
+                  rl.rightMargin = dp(24);
+                  bar.addView(right, rl);
+                  bar.setOnClickListener(vw -> {
+                      if (lock.getVisibility() != View.VISIBLE && cc.getVisibility() != View.VISIBLE) openCC();
+                  });
+                  root.addView(bar, new FrameLayout.LayoutParams(-1, sbh));
+              }
+
+              static class WifiView extends View {
+                  Paint p = new Paint(Paint.ANTI_ALIAS_FLAG); boolean on = true; float d;
+                  WifiView(Context c, float density) { super(c); d = density; p.setColor(0xFFFFFFFF); p.setStrokeCap(Paint.Cap.ROUND); }
+                  @Override protected void onDraw(Canvas cv) {
+                      float cx = getWidth() / 2f, cy = getHeight() - 1.5f * d;
+                      p.setAlpha(on ? 255 : 90);
+                      p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(1.8f * d);
+                      float[] radii = {4.5f, 8f, 11.5f};
+                      for (float r : radii) { float rad = r * d; cv.drawArc(new RectF(cx - rad, cy - rad, cx + rad, cy + rad), 225, 90, false, p); }
+                      p.setStyle(Paint.Style.FILL);
+                      cv.drawCircle(cx, cy, 1.5f * d, p);
+                  }
+              }
+
+              @Override public boolean dispatchTouchEvent(MotionEvent e) {
+                  int a = e.getActionMasked();
+                  if (a == MotionEvent.ACTION_DOWN) {
+                      boolean free = lock.getVisibility() != View.VISIBLE && cc.getVisibility() != View.VISIBLE
+                          && search.getVisibility() != View.VISIBLE && settled < pageCount - 1;
+                      gx = e.getRawX(); gy = e.getRawY(); gFired = false;
+                      gTracking = free && gy > sbh && gy < H * 0.45f;
+                  } else if (a == MotionEvent.ACTION_MOVE && gTracking && !gFired) {
+                      float dy = e.getRawY() - gy, dx = Math.abs(e.getRawX() - gx);
+                      if (dy > dp(70) && dy > dx * 1.5f) {
+                          gFired = true;
+                          MotionEvent cancel = MotionEvent.obtain(e); cancel.setAction(MotionEvent.ACTION_CANCEL);
+                          super.dispatchTouchEvent(cancel); cancel.recycle();
+                          openCC();
+                          return true;
+                      }
+                  }
+                  return super.dispatchTouchEvent(e);
               }
 
               @Override protected void onNewIntent(Intent i) {
